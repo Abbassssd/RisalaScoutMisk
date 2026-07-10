@@ -90,6 +90,33 @@
       box-shadow: 0 14px 30px rgba(25,135,84,.22);
     }
 
+    .btn-logout {
+      background: #fff0f0;
+      color: var(--danger);
+      border: 1px solid #ffcaca;
+      border-radius: 16px;
+      padding: 13px 24px;
+      font-weight: 900;
+    }
+
+    .status-message {
+      display: none;
+      margin-bottom: 20px;
+      padding: 14px 16px;
+      border-radius: 15px;
+      font-weight: 800;
+      line-height: 1.7;
+    }
+
+    .status-message.error { display:block; color:#a61b1b; background:#fff0f0; border:1px solid #ffc4c4; }
+    .status-message.success { display:block; color:#146c43; background:#ecfff4; border:1px solid #a8e5c2; }
+
+    .account-info { margin-top:5px; color:var(--primary); font-size:13px; font-weight:800; }
+
+    .loading-overlay { position:fixed; inset:0; z-index:3000; display:grid; place-items:center; padding:20px; background:rgba(246,243,253,.94); }
+    .loading-card { width:100%; max-width:350px; padding:28px; text-align:center; background:#fff; border-radius:24px; box-shadow:0 24px 70px rgba(72,0,129,.20); }
+    .spinner-border { color:var(--primary); }
+
     .btn-delete {
       height: 52px;
       border: none;
@@ -262,24 +289,30 @@
 </head>
 
 <body>
+  <div id="loadingOverlay" class="loading-overlay"><div class="loading-card"><div class="spinner-border" role="status"></div><p id="loadingText" class="mt-3 mb-0">جاري التحقق من الحساب...</p></div></div>
+
   <main class="page">
 
     <section class="header-card">
       <div>
-        <h1>صفحة قطيع الاشبال</h1>
-        <p class="subtitle">إدارة بيانات فرقةالاشبال</p>
+        <h1>صفحة الاشبال </h1>
+        <p class="subtitle">إدارة بيانات قطيع الوعد</p>
+        <p id="accountInfo" class="account-info"></p>
       </div>
 
       <div class="d-flex gap-2 flex-wrap">
-        <button class="btn btn-main" onclick="openAddModal()">+ إضافة عضو</button>
-        <button class="btn btn-export" onclick="exportToExcel()">تصدير Excel</button>
+        <button type="button" id="addMemberButton" class="btn btn-main">+ إضافة عضو</button>
+        <button type="button" id="exportButton" class="btn btn-export">تصدير Excel</button>
+        <button type="button" id="logoutButton" class="btn btn-logout">تسجيل الخروج</button>
       </div>
     </section>
 
+    <div id="statusMessage" class="status-message" role="alert"></div>
+
     <section id="emptyBox" class="empty-box">
       <h2>لا يوجد بيانات حالياً</h2>
-      <p class="text-muted">الرجاء إضافة بياناتالاشبال.</p>
-      <button class="btn btn-main mt-3" onclick="openAddModal()">إضافة أول عضو</button>
+      <p class="text-muted">الرجاء إضافة البيانات .</p>
+      <button type="button" id="emptyAddButton" class="btn btn-main mt-3">إضافة أول عضو</button>
     </section>
 
     <section id="membersList" class="members-grid"></section>
@@ -416,24 +449,118 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <script>
-    const STORAGE_KEY = "leader5Members";
-    const EXCEL_FILE_NAME = "اشبال .xls";
+    const SUPABASE_URL = "https://hubdemnxzldlilyyjoyh.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_lOM6aOp6NU7nHozpTpsTSA_HfBb-Xqq";
+    const REQUIRED_LEADER = "leader5";
+    const LOGIN_PAGE = "./index.html";
+    const DEFAULT_PHOTO = "./LOGO KASHEF.png";
 
-    let members = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
+
+    let currentUser = null;
+    let currentProfile = null;
+    let members = [];
     let photoData = "";
 
-    const memberModal = new bootstrap.Modal(document.getElementById("memberModal"));
-    const detailsModal = new bootstrap.Modal(document.getElementById("detailsModal"));
-
+    const loadingOverlay = document.getElementById("loadingOverlay");
+    const loadingText = document.getElementById("loadingText");
+    const accountInfo = document.getElementById("accountInfo");
+    const statusMessage = document.getElementById("statusMessage");
     const membersList = document.getElementById("membersList");
     const emptyBox = document.getElementById("emptyBox");
     const form = document.getElementById("memberForm");
     const deleteBtn = document.getElementById("deleteBtn");
+    const addMemberButton = document.getElementById("addMemberButton");
+    const emptyAddButton = document.getElementById("emptyAddButton");
+    const exportButton = document.getElementById("exportButton");
+    const logoutButton = document.getElementById("logoutButton");
 
-    function saveMembers() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(members));
+    const memberModal = new bootstrap.Modal(document.getElementById("memberModal"));
+    const detailsModal = new bootstrap.Modal(document.getElementById("detailsModal"));
+
+    function setLoading(show, message = "جاري التحميل...") {
+      loadingText.textContent = message;
+      loadingOverlay.style.display = show ? "grid" : "none";
+    }
+
+    function showStatus(message, type = "error") {
+      statusMessage.textContent = message;
+      statusMessage.className = "status-message " + type;
+    }
+
+    function clearStatus() {
+      statusMessage.textContent = "";
+      statusMessage.className = "status-message";
+    }
+
+    function esc(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    async function initializePage() {
+      try {
+        setLoading(true, "جاري التحقق من الحساب...");
+
+        const { data: { session }, error: sessionError } = await db.auth.getSession();
+        if (sessionError) throw sessionError;
+
+        if (!session?.user) {
+          window.location.replace(LOGIN_PAGE);
+          return;
+        }
+
+        currentUser = session.user;
+
+        const { data: profile, error: profileError } = await db
+          .from("profiles")
+          .select("id, leader_username, role")
+          .eq("id", currentUser.id)
+          .single();
+
+        if (profileError) throw new Error("تعذر تحميل ملف الحساب: " + profileError.message);
+
+        if (profile.role !== "leader" || profile.leader_username !== REQUIRED_LEADER) {
+          await db.auth.signOut();
+          window.location.replace(LOGIN_PAGE);
+          return;
+        }
+
+        currentProfile = profile;
+        accountInfo.textContent = "الحساب: " + profile.leader_username + " — " + (currentUser.email || "");
+        await loadMembers();
+      } catch (error) {
+        console.error(error);
+        showStatus(error.message || "حدث خطأ أثناء فتح الصفحة.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function loadMembers() {
+      clearStatus();
+      const { data, error } = await db
+        .from("members")
+        .select("*")
+        .eq("owner_id", currentUser.id)
+        .order("id", { ascending: false });
+
+      if (error) {
+        showStatus("خطأ في تحميل البيانات: " + error.message);
+        return;
+      }
+
+      members = data || [];
+      renderMembers();
     }
 
     function openAddModal() {
@@ -448,29 +575,27 @@
 
     function editMember(index) {
       const m = members[index];
-
       document.getElementById("editIndex").value = index;
       document.getElementById("modalTitle").innerText = "تعديل بيانات العضو";
       deleteBtn.style.display = "block";
 
-      document.getElementById("firstName").value = m.firstName || "";
-      document.getElementById("fatherName").value = m.fatherName || "";
-      document.getElementById("familyName").value = m.familyName || "";
-      document.getElementById("motherName").value = m.motherName || "";
-      document.getElementById("motherFamilyName").value = m.motherFamilyName || "";
-      document.getElementById("birthDate").value = m.birthDate || "";
-      document.getElementById("birthPlace").value = m.birthPlace || "";
-      document.getElementById("recordNumber").value = m.recordNumber || "";
-      document.getElementById("bloodType").value = m.bloodType || "";
+      document.getElementById("firstName").value = m.first_name || "";
+      document.getElementById("fatherName").value = m.father_name || "";
+      document.getElementById("familyName").value = m.family_name || "";
+      document.getElementById("motherName").value = m.mother_name || "";
+      document.getElementById("motherFamilyName").value = m.mother_family_name || "";
+      document.getElementById("birthDate").value = m.birth_date || "";
+      document.getElementById("birthPlace").value = m.birth_place || "";
+      document.getElementById("recordNumber").value = m.record_number || "";
+      document.getElementById("bloodType").value = m.blood_type || "";
       document.getElementById("phone").value = m.phone || "";
-      document.getElementById("parentPhone").value = m.parentPhone || "";
+      document.getElementById("parentPhone").value = m.parent_phone || "";
       document.getElementById("email").value = m.email || "";
-      document.getElementById("familyMembers").value = m.familyMembers || "";
+      document.getElementById("familyMembers").value = m.family_members || "";
       document.getElementById("address").value = m.address || "";
-      document.getElementById("healthNotes").value = m.healthNotes || "";
+      document.getElementById("healthNotes").value = m.health_notes || "";
 
       photoData = m.photo || "";
-
       const preview = document.getElementById("photoPreview");
       if (photoData) {
         preview.src = photoData;
@@ -482,155 +607,149 @@
       memberModal.show();
     }
 
-    function deleteMember() {
+    async function deleteMember() {
       const editIndex = document.getElementById("editIndex").value;
       if (editIndex === "") return;
+      const member = members[editIndex];
+      if (!confirm("هل أنت متأكد أنك تريد حذف هذا العضو؟")) return;
 
-      if (confirm("هل أنت متأكد أنك تريد حذف هذا العضو؟")) {
-        members.splice(editIndex, 1);
-        saveMembers();
-        renderMembers();
-        memberModal.hide();
+      const { error } = await db
+        .from("members")
+        .delete()
+        .eq("id", member.id)
+        .eq("owner_id", currentUser.id);
+
+      if (error) {
+        showStatus("خطأ في الحذف: " + error.message);
+        return;
       }
+
+      memberModal.hide();
+      showStatus("تم حذف العضو بنجاح.", "success");
+      await loadMembers();
     }
 
     document.getElementById("photo").addEventListener("change", function () {
       const file = this.files[0];
       if (!file) return;
 
+      if (file.size > 2 * 1024 * 1024) {
+        showStatus("حجم الصورة كبير. الحد الأقصى 2MB.");
+        this.value = "";
+        return;
+      }
+
       const reader = new FileReader();
-      reader.onload = function (e) {
-        photoData = e.target.result;
+      reader.onload = function (event) {
+        photoData = event.target.result;
         const preview = document.getElementById("photoPreview");
         preview.src = photoData;
         preview.style.display = "block";
       };
-
       reader.readAsDataURL(file);
     });
 
-    form.addEventListener("submit", function (e) {
-      e.preventDefault();
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
 
-      const member = {
-        photo: photoData,
-        firstName: document.getElementById("firstName").value.trim(),
-        fatherName: document.getElementById("fatherName").value.trim(),
-        familyName: document.getElementById("familyName").value.trim(),
-        motherName: document.getElementById("motherName").value.trim(),
-        motherFamilyName: document.getElementById("motherFamilyName").value.trim(),
-        birthDate: document.getElementById("birthDate").value,
-        birthPlace: document.getElementById("birthPlace").value.trim(),
-        recordNumber: document.getElementById("recordNumber").value.trim(),
-        bloodType: document.getElementById("bloodType").value,
+      const memberData = {
+        owner_id: currentUser.id,
+        leader_username: currentProfile.leader_username,
+        photo: photoData || null,
+        first_name: document.getElementById("firstName").value.trim(),
+        father_name: document.getElementById("fatherName").value.trim(),
+        family_name: document.getElementById("familyName").value.trim(),
+        mother_name: document.getElementById("motherName").value.trim(),
+        mother_family_name: document.getElementById("motherFamilyName").value.trim(),
+        birth_date: document.getElementById("birthDate").value || null,
+        birth_place: document.getElementById("birthPlace").value.trim(),
+        record_number: document.getElementById("recordNumber").value.trim(),
+        blood_type: document.getElementById("bloodType").value,
         phone: document.getElementById("phone").value.trim(),
-        parentPhone: document.getElementById("parentPhone").value.trim(),
+        parent_phone: document.getElementById("parentPhone").value.trim(),
         email: document.getElementById("email").value.trim(),
-        familyMembers: document.getElementById("familyMembers").value,
+        family_members: document.getElementById("familyMembers").value ? Number(document.getElementById("familyMembers").value) : null,
         address: document.getElementById("address").value.trim(),
-        healthNotes: document.getElementById("healthNotes").value.trim()
+        health_notes: document.getElementById("healthNotes").value.trim()
       };
 
       const editIndex = document.getElementById("editIndex").value;
+      let response;
 
       if (editIndex === "") {
-        members.push(member);
+        response = await db.from("members").insert(memberData);
       } else {
-        members[editIndex] = member;
+        response = await db
+          .from("members")
+          .update(memberData)
+          .eq("id", members[editIndex].id)
+          .eq("owner_id", currentUser.id);
       }
 
-      saveMembers();
-      renderMembers();
+      if (response.error) {
+        showStatus("خطأ في حفظ البيانات: " + response.error.message);
+        return;
+      }
+
       memberModal.hide();
+      showStatus(editIndex === "" ? "تمت إضافة العضو بنجاح." : "تم تعديل العضو بنجاح.", "success");
+      await loadMembers();
     });
 
     function showMember(index) {
       const m = members[index];
-
       document.getElementById("detailsBody").innerHTML = `
-        <img src="${m.photo || 'LOGO KASHEF.png'}" class="detail-photo">
-        <div class="detail-row"><strong>الاسم الكامل:</strong> ${m.firstName} ${m.fatherName} ${m.familyName}</div>
-        <div class="detail-row"><strong>اسم الأم:</strong> ${m.motherName || "-"} ${m.motherFamilyName || ""}</div>
-        <div class="detail-row"><strong>تاريخ الولادة:</strong> ${m.birthDate || "-"}</div>
-        <div class="detail-row"><strong>محل الولادة:</strong> ${m.birthPlace || "-"}</div>
-        <div class="detail-row"><strong>رقم السجل:</strong> ${m.recordNumber || "-"}</div>
-        <div class="detail-row"><strong>فئة الدم:</strong> ${m.bloodType || "-"}</div>
-        <div class="detail-row"><strong>رقم الهاتف:</strong> ${m.phone || "-"}</div>
-        <div class="detail-row"><strong>رقم ولي الأمر:</strong> ${m.parentPhone || "-"}</div>
-        <div class="detail-row"><strong>البريد الإلكتروني:</strong> ${m.email || "-"}</div>
-        <div class="detail-row"><strong>عدد أفراد الأسرة:</strong> ${m.familyMembers || "-"}</div>
-        <div class="detail-row"><strong>العنوان:</strong> ${m.address || "-"}</div>
-        <div class="detail-row"><strong>ملاحظات صحية:</strong> ${m.healthNotes || "-"}</div>
+        <img src="${esc(m.photo || DEFAULT_PHOTO)}" class="detail-photo">
+        <div class="detail-row"><strong>الاسم الكامل:</strong> ${esc(m.first_name || "")} ${esc(m.father_name || "")} ${esc(m.family_name || "")}</div>
+        <div class="detail-row"><strong>اسم الأم:</strong> ${esc(m.mother_name || "-")} ${esc(m.mother_family_name || "")}</div>
+        <div class="detail-row"><strong>تاريخ الولادة:</strong> ${esc(m.birth_date || "-")}</div>
+        <div class="detail-row"><strong>محل الولادة:</strong> ${esc(m.birth_place || "-")}</div>
+        <div class="detail-row"><strong>رقم السجل:</strong> ${esc(m.record_number || "-")}</div>
+        <div class="detail-row"><strong>فئة الدم:</strong> ${esc(m.blood_type || "-")}</div>
+        <div class="detail-row"><strong>رقم الهاتف:</strong> ${esc(m.phone || "-")}</div>
+        <div class="detail-row"><strong>رقم ولي الأمر:</strong> ${esc(m.parent_phone || "-")}</div>
+        <div class="detail-row"><strong>البريد الإلكتروني:</strong> ${esc(m.email || "-")}</div>
+        <div class="detail-row"><strong>عدد أفراد الأسرة:</strong> ${esc(m.family_members || "-")}</div>
+        <div class="detail-row"><strong>العنوان:</strong> ${esc(m.address || "-")}</div>
+        <div class="detail-row"><strong>ملاحظات صحية:</strong> ${esc(m.health_notes || "-")}</div>
       `;
-
       detailsModal.show();
     }
 
     function exportToExcel() {
       if (members.length === 0) {
-        alert("لا يوجد بيانات لتصديرها.");
+        showStatus("لا توجد بيانات لتصديرها.");
         return;
       }
 
-      let table = `
-        <table border="1">
-          <thead>
-            <tr>
-              <th>الاسم</th>
-              <th>اسم الأب</th>
-              <th>الشهرة</th>
-              <th>اسم الأم</th>
-              <th>شهرة الأم</th>
-              <th>تاريخ الولادة</th>
-              <th>محل الولادة</th>
-              <th>رقم السجل</th>
-              <th>فئة الدم</th>
-              <th>رقم الهاتف</th>
-              <th>رقم ولي الأمر</th>
-              <th>البريد الإلكتروني</th>
-              <th>عدد أفراد الأسرة</th>
-              <th>العنوان</th>
-              <th>ملاحظات صحية</th>
-            </tr>
-          </thead>
-          <tbody>
-      `;
+      let table = `<table border="1"><thead><tr>
+        <th>الاسم</th><th>اسم الأب</th><th>الشهرة</th><th>اسم الأم</th><th>شهرة الأم</th>
+        <th>تاريخ الولادة</th><th>محل الولادة</th><th>رقم السجل</th><th>فئة الدم</th>
+        <th>رقم الهاتف</th><th>رقم ولي الأمر</th><th>البريد الإلكتروني</th>
+        <th>عدد أفراد الأسرة</th><th>العنوان</th><th>ملاحظات صحية</th>
+      </tr></thead><tbody>`;
 
       members.forEach(m => {
-        table += `
-          <tr>
-            <td>${m.firstName || ""}</td>
-            <td>${m.fatherName || ""}</td>
-            <td>${m.familyName || ""}</td>
-            <td>${m.motherName || ""}</td>
-            <td>${m.motherFamilyName || ""}</td>
-            <td>${m.birthDate || ""}</td>
-            <td>${m.birthPlace || ""}</td>
-            <td>${m.recordNumber || ""}</td>
-            <td>${m.bloodType || ""}</td>
-            <td>${m.phone || ""}</td>
-            <td>${m.parentPhone || ""}</td>
-            <td>${m.email || ""}</td>
-            <td>${m.familyMembers || ""}</td>
-            <td>${m.address || ""}</td>
-            <td>${m.healthNotes || ""}</td>
-          </tr>
-        `;
+        table += `<tr>
+          <td>${esc(m.first_name || "")}</td><td>${esc(m.father_name || "")}</td><td>${esc(m.family_name || "")}</td>
+          <td>${esc(m.mother_name || "")}</td><td>${esc(m.mother_family_name || "")}</td>
+          <td>${esc(m.birth_date || "")}</td><td>${esc(m.birth_place || "")}</td><td>${esc(m.record_number || "")}</td>
+          <td>${esc(m.blood_type || "")}</td><td>${esc(m.phone || "")}</td><td>${esc(m.parent_phone || "")}</td>
+          <td>${esc(m.email || "")}</td><td>${esc(m.family_members || "")}</td><td>${esc(m.address || "")}</td>
+          <td>${esc(m.health_notes || "")}</td>
+        </tr>`;
       });
 
       table += `</tbody></table>`;
-
-      const blob = new Blob(["\ufeff" + table], {
-        type: "application/vnd.ms-excel;charset=utf-8;"
-      });
-
+      const blob = new Blob(["\ufeff" + table], { type: "application/vnd.ms-excel;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = EXCEL_FILE_NAME;
+      link.href = url;
+      link.download = "بيانات_باقة_العنبر.xls";
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(link.href);
+      link.remove();
+      URL.revokeObjectURL(url);
     }
 
     function renderMembers() {
@@ -646,21 +765,42 @@
       members.forEach((m, index) => {
         const card = document.createElement("div");
         card.className = "member-card";
-
         card.innerHTML = `
-          <img src="${m.photo || 'LOGO KASHEF.png'}" class="member-photo">
-          <h3 class="member-name">${m.firstName} ${m.fatherName} ${m.familyName}</h3>
+          <img src="${esc(m.photo || DEFAULT_PHOTO)}" class="member-photo">
+          <h3 class="member-name">${esc(m.first_name || "")} ${esc(m.father_name || "")} ${esc(m.family_name || "")}</h3>
           <div class="member-actions">
-            <button class="btn-show" onclick="showMember(${index})">التفاصيل</button>
-            <button class="btn-edit" onclick="editMember(${index})">تعديل</button>
+            <button class="btn-show" data-action="details" data-index="${index}">التفاصيل</button>
+            <button class="btn-edit" data-action="edit" data-index="${index}">تعديل</button>
           </div>
         `;
-
         membersList.appendChild(card);
       });
     }
 
-    renderMembers();
+    membersList.addEventListener("click", function (event) {
+      const button = event.target.closest("button[data-action]");
+      if (!button) return;
+      const index = Number(button.dataset.index);
+      if (button.dataset.action === "details") showMember(index);
+      if (button.dataset.action === "edit") editMember(index);
+    });
+
+    async function logout() {
+      logoutButton.disabled = true;
+      logoutButton.textContent = "جاري تسجيل الخروج...";
+      try {
+        await db.auth.signOut();
+      } finally {
+        window.location.replace(LOGIN_PAGE);
+      }
+    }
+
+    addMemberButton.addEventListener("click", openAddModal);
+    emptyAddButton.addEventListener("click", openAddModal);
+    exportButton.addEventListener("click", exportToExcel);
+    logoutButton.addEventListener("click", logout);
+
+    initializePage();
   </script>
 </body>
 </html>
